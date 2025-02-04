@@ -1,0 +1,472 @@
+from faker import Faker
+import pandas as pd
+import numpy as np
+import random
+from datetime import timedelta
+
+fake = Faker()
+
+def generate_fx_leads(num_leads=100):
+    leads = []
+    
+    for _ in range(num_leads):
+        lead = {
+            'lead_id': fake.uuid4(),
+            'first_name': fake.first_name(),
+            'last_name': fake.last_name(),
+            'company': fake.company(),
+            'industry': random.choice([
+                'Technology', 'Finance', 'Manufacturing', 
+                'Retail', 'Healthcare', 'Logistics'
+            ]),
+            'email': fake.email(),
+            'phone': fake.phone_number(),
+            'country': fake.country(),
+            
+            'website_visits': random.randint(1, 10),
+            'time_on_site': round(random.uniform(0.5, 15), 2),
+            'pages_viewed': random.randint(1, 7),
+            
+            'emails_received': random.randint(1, 5),
+            'email_opens': random.randint(0, 5),
+            'email_clicks': random.randint(0, 3),
+            
+            'linkedin_views': random.randint(0, 10),
+            'linkedin_interactions': random.randint(0, 5),
+            
+            'potential_deal_size': round(random.uniform(50000, 5000000), 2),
+            'lead_score': random.randint(1, 100),
+            'conversion_likelihood': round(random.uniform(0, 1), 2)
+        }
+        
+        base_date = fake.date_between(start_date='-6m', end_date='today')
+        lead['first_interaction_date'] = base_date
+        lead['last_interaction_date'] = base_date + timedelta(days=random.randint(1, 60))
+        
+        leads.append(lead)
+    
+    return pd.DataFrame(leads)
+
+fx_leads_df = generate_fx_leads(1000)
+
+fx_leads_df.to_csv('fx_leads_dataset.csv', index=False)
+
+print(fx_leads_df.describe())
+
+high_potential_leads = fx_leads_df[fx_leads_df['lead_score'] > 70]
+medium_potential_leads = fx_leads_df[(fx_leads_df['lead_score'] > 40) & (fx_leads_df['lead_score'] <= 70)]
+low_potential_leads = fx_leads_df[fx_leads_df['lead_score'] <= 40]
+
+print("\nLead Segmentation:")
+print(f"High Potential Leads: {len(high_potential_leads)}")
+print(f"Medium Potential Leads: {len(medium_potential_leads)}")
+print(f"Low Potential Leads: {len(low_potential_leads)}")
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
+import plotly.express as px
+import plotly.graph_objs as go
+import plotly.io as pio
+
+df = pd.read_csv('fx_leads_dataset.csv')
+
+def prepare_features(df):
+    features = [
+        'website_visits', 
+        'time_on_site', 
+        'pages_viewed', 
+        'emails_received', 
+        'email_opens', 
+        'email_clicks', 
+        'linkedin_views', 
+        'potential_deal_size'
+    ]
+    
+    df['is_high_potential'] = (df['lead_score'] > 70).astype(int)
+    
+    X = df[features]
+    y = df['is_high_potential']
+    
+    return X, y
+
+X, y = prepare_features(df)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+rf_classifier = RandomForestClassifier(
+    n_estimators=100, 
+    random_state=42, 
+    class_weight='balanced'
+)
+rf_classifier.fit(X_train_scaled, y_train)
+
+y_pred = rf_classifier.predict(X_test_scaled)
+print("Classification Report:")
+print(classification_report(y_test, y_pred))
+
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': rf_classifier.feature_importances_
+}).sort_values('importance', ascending=False)
+print("\nFeature Importance:")
+print(feature_importance)
+
+def create_interactive_prospect_plot(df):
+    X_scaled = scaler.transform(X)
+    df['prospect_probability'] = rf_classifier.predict_proba(X_scaled)[:, 1]
+    
+    fig = px.scatter(
+        df, 
+        x='potential_deal_size', 
+        y='time_on_site',
+        color='prospect_probability',
+        hover_data=[
+            'company', 
+            'industry', 
+            'lead_score', 
+            'prospect_probability'
+        ],
+        title='Prospect Potential Visualization',
+        labels={
+            'potential_deal_size': 'Potential Deal Size',
+            'time_on_site': 'Time on Site (minutes)',
+            'prospect_probability': 'Prospect Probability'
+        },
+        color_continuous_scale='viridis'
+    )
+    
+    fig.update_layout(
+        height=600,
+        width=1000,
+        template='plotly_white'
+    )
+    
+    pio.write_html(fig, file='prospect_potential_visualization.html')
+    
+    return fig
+
+interactive_plot = create_interactive_prospect_plot(df)
+
+def segment_prospects(df):
+    df['prospect_segment'] = pd.cut(
+        df['prospect_probability'], 
+        bins=[0, 0.3, 0.7, 1], 
+        labels=['Low Potential', 'Medium Potential', 'High Potential']
+    )
+    
+    segment_summary = df.groupby('prospect_segment').agg({
+        'potential_deal_size': ['mean', 'count'],
+        'lead_score': 'mean'
+    })
+    
+    print("\nProspect Segmentation Summary:")
+    print(segment_summary)
+    
+    return df
+
+df_segmented = segment_prospects(df)
+
+df_segmented.to_csv('segmented_prospects.csv', index=False)
+
+def create_summary_dashboard(df):
+    industry_deals = df.groupby('industry')['potential_deal_size'].mean().sort_values(ascending=False)
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=industry_deals.index, 
+            y=industry_deals.values, 
+            text=[f'${x:,.0f}' for x in industry_deals.values],
+            textposition='auto'
+        )
+    ])
+    
+    fig.update_layout(
+        title='Average Potential Deal Size by Industry',
+        xaxis_title='Industry',
+        yaxis_title='Average Potential Deal Size'
+    )
+    
+    pio.write_html(fig, file='industry_deal_size_dashboard.html')
+
+create_summary_dashboard(df)
+
+print("Analysis complete. Check the generated HTML files for interactive visualizations.")
+
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+import plotly.express as px
+import plotly.io as pio
+
+fake = Faker()
+
+def generate_fx_leads(num_leads=200):
+    leads = []
+    
+    for _ in range(num_leads):
+        lead = {
+            'lead_id': fake.uuid4(),
+            'company': fake.company(),
+            'industry': random.choice([
+                'Technology', 'Finance', 'Manufacturing', 
+                'Retail', 'Healthcare', 'Logistics'
+            ]),
+            'website_visits': random.randint(1, 10),
+            'time_on_site': round(random.uniform(0.5, 15), 2),
+            'potential_deal_size': round(random.uniform(50000, 5000000), 2),
+            'email_opens': random.randint(0, 5),
+            'lead_score': random.randint(1, 100)
+        }
+        leads.append(lead)
+    
+    return pd.DataFrame(leads)
+
+df = generate_fx_leads()
+
+def prepare_features(df):
+    features = [
+        'website_visits', 
+        'time_on_site', 
+        'email_opens'
+    ]
+    
+    df['is_high_potential'] = (df['lead_score'] > 70).astype(int)
+    
+    X = df[features]
+    y = df['is_high_potential']
+    
+    return X, y
+
+X, y = prepare_features(df)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+
+rf_classifier = RandomForestClassifier(
+    n_estimators=100, 
+    random_state=42, 
+    class_weight='balanced'
+)
+rf_classifier.fit(X_train_scaled, y_train)
+
+X_scaled = scaler.transform(X)
+df['prospect_probability'] = rf_classifier.predict_proba(X_scaled)[:, 1]
+
+def create_interactive_prospect_plot(df):
+    fig = px.scatter(
+        df, 
+        x='potential_deal_size', 
+        y='time_on_site',
+        color='prospect_probability',
+        size='website_visits',
+        hover_data=['company', 'industry'],
+        title='Prospect Potential Visualization',
+        labels={
+            'potential_deal_size': 'Potential Deal Size ($)',
+            'time_on_site': 'Time on Site (minutes)',
+            'prospect_probability': 'Prospect Probability'
+        },
+        color_continuous_scale='viridis'
+    )
+    
+    fig.update_layout(
+        height=600,
+        width=1000,
+        template='plotly_white',
+        coloraxis_colorbar=dict(title='Prospect Probability')
+    )
+    
+    pio.write_html(fig, file='prospect_potential_visualization.html')
+    
+    fig.show()
+    
+    return fig
+
+interactive_plot = create_interactive_prospect_plot(df)
+
+print("\nProspect Probability Statistics:")
+print(df['prospect_probability'].describe())
+
+industry_potential = df.groupby('industry')['prospect_probability'].mean().sort_values(ascending=False)
+print("\nAverage Prospect Probability by Industry:")
+print(industry_potential)
+
+
+import plotly.express as px
+import plotly.graph_objs as go
+import plotly.io as pio
+from sklearn.preprocessing import MinMaxScaler
+
+# Set up Faker for realistic data generation
+fake = Faker()
+
+# Custom Lead Generation Function
+def generate_targeted_leads(num_leads=500):
+    leads = []
+    target_industries = ['Engineering', 'Manufacturing', 'Technology']
+    contract_types = ['Options', 'Forwards', 'Both']
+    
+    for _ in range(num_leads):
+        # Randomly select industry from target industries
+        industry = random.choice(target_industries)
+        
+        # Generate realistic FX exposure
+        fx_exposure = random.uniform(3000000, 40000000)
+        
+        # Select contract type
+        contract_type = random.choice(contract_types)
+        
+        lead = {
+            'lead_id': fake.uuid4(),
+            'company_name': fake.company(),
+            'industry': industry,
+            'country': fake.country(),
+            'annual_fx_exposure': fx_exposure,
+            'contract_type': contract_type,
+            
+            # Additional contextual features
+            'company_size': random.choice(['Small', 'Medium', 'Large']),
+            'global_operations': random.choice([True, False]),
+            'previous_fx_experience': random.uniform(0, 10),
+            
+            # Simulated interaction metrics
+            'website_visits': random.randint(1, 10),
+            'email_interactions': random.randint(0, 5),
+            'content_downloads': random.randint(0, 3)
+        }
+        leads.append(lead)
+    
+    return pd.DataFrame(leads)
+
+# Lead Scoring Algorithm
+def calculate_lead_score(lead):
+    # Base score components
+    score = 0
+    
+    # Industry Scoring
+    industry_score = {
+        'Engineering': 25,
+        'Manufacturing': 25,
+        'Technology': 25
+    }
+    score += industry_score.get(lead['industry'], 0)
+    
+    # FX Exposure Scoring
+    if 3000000 <= lead['annual_fx_exposure'] <= 40000000:
+        # Normalize score based on exposure
+        exposure_score = min(
+            25, 
+            25 * (lead['annual_fx_exposure'] - 3000000) / (40000000 - 3000000)
+        )
+        score += exposure_score
+    
+    # Contract Type Scoring
+    contract_score = {
+        'Options': 20,
+        'Forwards': 20,
+        'Both': 25
+    }
+    score += contract_score.get(lead['contract_type'], 0)
+    
+    # Additional Contextual Scoring
+    if lead['global_operations']:
+        score += 10
+    
+    if lead['previous_fx_experience'] > 5:
+        score += 10
+    
+    # Interaction Metrics Bonus
+    interaction_score = min(
+        15, 
+        lead['website_visits'] * 2 + 
+        lead['email_interactions'] * 3 + 
+        lead['content_downloads'] * 4
+    )
+    score += interaction_score
+    
+    # Ensure score is between 0-100
+    return min(max(score, 0), 100)
+
+# Generate Leads Dataset
+leads_df = generate_targeted_leads()
+
+# Apply Lead Scoring
+leads_df['lead_score'] = leads_df.apply(calculate_lead_score, axis=1)
+
+# Interactive Visualization
+def create_lead_scoring_visualization(df):
+    # Create scatter plot
+    fig = px.scatter(
+        df, 
+        x='annual_fx_exposure', 
+        y='lead_score',
+        color='industry',
+        size='lead_score',
+        hover_data=[
+            'company_name', 
+            'contract_type', 
+            'global_operations'
+        ],
+        title='Lead Scoring Analysis',
+        labels={
+            'annual_fx_exposure': 'Annual FX Exposure ($)',
+            'lead_score': 'Lead Score',
+            'industry': 'Industry'
+        }
+    )
+    
+    # Customize layout
+    fig.update_layout(
+        height=700,
+        width=1200,
+        template='plotly_white'
+    )
+    
+    # Save interactive HTML
+    pio.write_html(fig, file='lead_scoring_visualization.html')
+    
+    # Show the plot
+    fig.show()
+    
+    return fig
+
+# Generate Visualization
+visualization = create_lead_scoring_visualization(leads_df)
+
+# Detailed Analysis
+def lead_scoring_analysis(df):
+    # Summary Statistics
+    print("\nLead Scoring Summary:")
+    print(df['lead_score'].describe())
+    
+    # Top Leads
+    top_leads = df[df['lead_score'] > 80].sort_values('lead_score', ascending=False)
+    print("\nTop Leads (Score > 80):")
+    print(top_leads[['company_name', 'industry', 'annual_fx_exposure', 'lead_score']].head())
+    
+    # Industry Distribution
+    industry_distribution = df.groupby('industry')['lead_score'].agg(['mean', 'count'])
+    print("\nLead Score by Industry:")
+    print(industry_distribution)
+    
+    # Contract Type Analysis
+    contract_analysis = df.groupby('contract_type')['lead_score'].agg(['mean', 'count'])
+    print("\nLead Score by Contract Type:")
+    print(contract_analysis)
+    
+    return top_leads
+
+# Perform Analysis
+top_prospects = lead_scoring_analysis(leads_df)
+
+# Export Datasets
+leads_df.to_csv('targeted_leads_with_scoring.csv', index=False)
+top_prospects.to_csv('top_prospects.csv', index=False)
+
+print("\nAnalysis complete. Check the generated files and visualization.")
